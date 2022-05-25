@@ -1,13 +1,18 @@
 from importlib import resources
+import threading
 import webbrowser
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLineEdit, QGraphicsDropShadowEffect
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLineEdit, QGraphicsDropShadowEffect, QCompleter
 from PyQt5.QtCore import (QEasingCurve, QEvent, QPropertyAnimation, QRect, Qt,
                           QTime, QTimer, QUrl, pyqtProperty)
 from PyQt5.QtGui import QColor, QIcon, QPixmap
 from PyQt5 import uic
 from const import *
+from login import Login
 from main import Ui_MainWindow
 from net import *
+from threads import LoginThread
+from user import User
+from util import *
 from styles import *
 import icons_rc
 import file_rc
@@ -21,10 +26,26 @@ class Application(Ui_MainWindow, QMainWindow):
         self.init()
         self.connections()
 
+    def update_users_list(self):
+        my_completer = QCompleter(get_usernames(self.users), self)
+        my_completer.setCaseSensitivity(0)
+        self.user_line_edit.setCompleter(my_completer)
+        
+    def autocomplete_credentials(self, text):
+        for user in self.users:
+            if user.is_username(text):
+                self.passw_line_edit.setText(user.password)
+                break
+    
     def init(self):
+        # users
+        self.users = load_users()
+        # set autocompleter
+        self.update_users_list()
         # message box
         self.message = None
         #
+        self.wait_message.setVisible(False)
         # setting icon by resources
         self.close_popup.setIcon(QIcon(":/Graphics/graphics/cil-x.png"))
         # setting up window title
@@ -52,6 +73,8 @@ class Application(Ui_MainWindow, QMainWindow):
         self.login_button.clicked.connect(self.login)
         self.close_popup.clicked.connect(self.closeMessage)
         self.show_details.clicked.connect(self.details_message)
+        # username on text change
+        self.user_line_edit.textChanged.connect(self.autocomplete_credentials)
         # about
         self.about_action.triggered.connect(self.about)
         # links
@@ -63,23 +86,50 @@ class Application(Ui_MainWindow, QMainWindow):
     def login(self):
         user = self.user_line_edit.text()
         passw = self.passw_line_edit.text()
-        #
+        # 
         if user and passw:
             try:
                 # try to login
-                login(user=user, passw=passw)
-                # if success, show notification
-                self.set_state("Usted está conectado", STATE_OK)
-            except LoginError as error:
-                self.set_state(error.args[0], STATE_ERROR)
-            except BadServerResponseCode as error:
-                self.set_state(error.args[0], STATE_ERROR)
-            except requests.exceptions.ConnectionError as error:
-                self.error("Mientras se conectaba",
-                           "Ha fallado la conexión", str(error.args[0]))
+                login = Login(user=user, passw=passw)
+                login_thread = LoginThread(login)
+                # signals
+                login_thread.post_request_signal.connect(lambda: self.show_hide_wait_message(True))
+                login_thread.error_signal.connect(self.post_error)
+                login_thread.finish_signal.connect(self.post_success)
+                # launch thread
+                task = threading.Thread(target=login_thread.run)
+                task.start()
+            except Exception as error:
+                self.error("Hilo de petición", "Ha fallado el proceso", error.args[0])
         else:
             self.error("Login", "Debe ingresar un usuario y una contraseña")
 
+    def show_hide_wait_message(self, b:bool):
+        self.wait_message.setVisible(b)
+        self.cardview.setVisible(not b)
+    
+    def post_error(self, exception:Exception):
+        if isinstance(exception, LoginError):
+            self.set_state(exception.args[0], STATE_ERROR)
+        elif isinstance(exception, BadServerResponseCode):
+            self.set_state(exception.args[0], STATE_ERROR)
+        elif isinstance(exception, requests.exceptions.ConnectionError):
+            self.error("Mientras se conectaba",
+                           "Ha fallado la conexión", str(exception.args[0]))
+        self.show_hide_wait_message(False)
+    
+    def post_success(self):
+        self.show_hide_wait_message(False)
+        # if success, show notification
+        self.set_state("Ya está conectado", STATE_OK)
+        # save user
+        user = self.user_line_edit.text()
+        passw = self.passw_line_edit.text()
+        self.users.append(User(username=user, password=passw))
+        save_users(self.users)
+        # update autocompleter
+        self.update_users_list()
+    
     # show an error notification
     def error(self, place, text="", details=""):
         self.message = QMessageBox(
