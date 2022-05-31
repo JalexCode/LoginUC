@@ -19,7 +19,7 @@ def load_users() -> list:
             return pickle.load(db)
     except Exception as e:
         print(e.args)
-        return []
+    return []
 
 def save_users(users_list:list) -> None:
     try:

@@ -27,7 +27,9 @@ class Application(Ui_MainWindow, QMainWindow):
         self.connections()
 
     def update_users_list(self):
-        my_completer = QCompleter(get_usernames(self.users), self)
+        users = get_usernames(self.users)
+        print(users)
+        my_completer = QCompleter(users, self)
         my_completer.setCaseSensitivity(0)
         self.user_line_edit.setCompleter(my_completer)
         
